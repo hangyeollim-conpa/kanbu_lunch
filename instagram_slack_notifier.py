@@ -1,0 +1,264 @@
+import argparse
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_CONFIG_NAME = "config.json"
+DEFAULT_STATE_NAME = ".instagram_state.json"
+INSTAGRAM_APP_ID = "936619743392459"
+INSTAGRAM_URL_TEMPLATE = (
+    "https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+)
+
+
+@dataclass
+class Post:
+    post_id: str
+    shortcode: str
+    permalink: str
+    timestamp: int
+    caption: str
+    display_url: str
+    is_pinned: bool
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Check a public Instagram profile and post new updates to Slack."
+    )
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG_NAME,
+        help=f"Path to config JSON. Defaults to {DEFAULT_CONFIG_NAME}.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fetch and print the latest detected post without sending to Slack.",
+    )
+    return parser.parse_args()
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8-sig") as fh:
+        return json.load(fh)
+
+
+def save_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+
+def fetch_instagram_profile(username: str) -> dict[str, Any]:
+    url = INSTAGRAM_URL_TEMPLATE.format(username=urllib.parse.quote(username))
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "x-ig-app-id": INSTAGRAM_APP_ID,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def extract_latest_post(profile_data: dict[str, Any]) -> Post:
+    user = profile_data["data"]["user"]
+    edges = user["edge_owner_to_timeline_media"]["edges"]
+
+    if not edges:
+        raise RuntimeError("No posts were found on the Instagram profile.")
+
+    def to_post(edge: dict[str, Any]) -> Post:
+        node = edge["node"]
+        caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+        caption = caption_edges[0]["node"]["text"] if caption_edges else ""
+        shortcode = node["shortcode"]
+        return Post(
+            post_id=node["id"],
+            shortcode=shortcode,
+            permalink=f"https://www.instagram.com/p/{shortcode}/",
+            timestamp=int(node["taken_at_timestamp"]),
+            caption=caption.strip(),
+            display_url=node.get("display_url", ""),
+            is_pinned=bool(node.get("pinned_for_users")),
+        )
+
+    posts = [to_post(edge) for edge in edges]
+    return max(posts, key=lambda post: post.timestamp)
+
+
+def format_timestamp(timestamp: int) -> str:
+    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone()
+    return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def build_slack_payload(profile_url: str, username: str, post: Post) -> dict[str, Any]:
+    caption = post.caption if post.caption else "(No caption)"
+    pinned_text = "Yes" if post.is_pinned else "No"
+    text = (
+        f"Instagram update detected: @{username}\n"
+        f"Post: {post.permalink}\n"
+        f"Time: {format_timestamp(post.timestamp)}"
+    )
+
+    return {
+        "text": text,
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"@{username} new post"},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Profile*\n<{profile_url}|@{username}>\n\n"
+                        f"*Post link*\n<{post.permalink}|Open post>\n\n"
+                        f"*Published at*\n{format_timestamp(post.timestamp)}\n\n"
+                        f"*Pinned post*\n{pinned_text}"
+                    ),
+                },
+                "accessory": {
+                    "type": "image",
+                    "image_url": post.display_url,
+                    "alt_text": f"{username} latest post",
+                },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Caption*\n```{caption[:2900]}```",
+                },
+            },
+        ],
+    }
+
+
+def post_to_slack(webhook_url: str, payload: dict[str, Any]) -> None:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        webhook_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        result = response.read().decode("utf-8").strip()
+        if result != "ok":
+            raise RuntimeError(f"Slack webhook returned unexpected response: {result}")
+
+
+def resolve_path(base_dir: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else base_dir / path
+
+
+def load_previous_post_id(state_path: Path) -> str | None:
+    if not state_path.exists():
+        return None
+
+    state = load_json(state_path)
+    previous_post_id = state.get("last_seen_post_id")
+    return str(previous_post_id) if previous_post_id is not None else None
+
+
+def save_post_state(state_path: Path, post: Post) -> None:
+    save_json(
+        state_path,
+        {
+            "last_seen_post_id": post.post_id,
+            "last_seen_shortcode": post.shortcode,
+            "last_seen_timestamp": post.timestamp,
+        },
+    )
+
+
+def main() -> int:
+    args = parse_args()
+    config_path = Path(args.config).resolve()
+
+    if not config_path.exists():
+        print(
+            f"Config file not found: {config_path}\n"
+            f"Copy config.example.json to {config_path.name} and fill it in first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    config = load_json(config_path)
+    base_dir = config_path.parent
+    state_path = resolve_path(base_dir, config.get("state_file", DEFAULT_STATE_NAME))
+    notify_on_first_run = bool(config.get("notify_on_first_run", False))
+    username = config["instagram_username"]
+    profile_url = config["instagram_profile_url"]
+    webhook_url = config.get("slack_webhook_url", "")
+
+    try:
+        profile_data = fetch_instagram_profile(username)
+        post = extract_latest_post(profile_data)
+    except (KeyError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
+        print(f"Failed to fetch Instagram profile: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        json.dumps(
+            {
+                "latest_post_id": post.post_id,
+                "shortcode": post.shortcode,
+                "permalink": post.permalink,
+                "timestamp": post.timestamp,
+                "formatted_time": format_timestamp(post.timestamp),
+                "is_pinned": post.is_pinned,
+                "caption": post.caption,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    if args.dry_run:
+        return 0
+
+    previous_post_id = load_previous_post_id(state_path)
+    if previous_post_id == post.post_id:
+        print("No new Instagram post found. Slack message was not sent.")
+        return 0
+
+    if previous_post_id is None and not notify_on_first_run:
+        save_post_state(state_path, post)
+        print("First run detected. State saved without sending a Slack message.")
+        return 0
+
+    if not webhook_url:
+        print("Missing slack_webhook_url in config.json.", file=sys.stderr)
+        return 1
+
+    try:
+        payload = build_slack_payload(
+            profile_url=profile_url,
+            username=username,
+            post=post,
+        )
+        post_to_slack(webhook_url, payload)
+    except (urllib.error.URLError, RuntimeError) as exc:
+        print(f"Failed to post to Slack: {exc}", file=sys.stderr)
+        return 1
+
+    save_post_state(state_path, post)
+    print("New Instagram post found and sent to Slack.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

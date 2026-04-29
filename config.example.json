@@ -1,0 +1,7 @@
+{
+  "instagram_username": "lunch11_14",
+  "instagram_profile_url": "https://www.instagram.com/lunch11_14/",
+  "slack_webhook_url": "https://hooks.slack.com/services/REPLACE/ME",
+  "state_file": ".instagram_state.json",
+  "notify_on_first_run": false
+}
