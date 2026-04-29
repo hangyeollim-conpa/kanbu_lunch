@@ -5,6 +5,12 @@ on:
     # 11:00 Asia/Seoul = 02:00 UTC
     - cron: "0 2 * * *"
   workflow_dispatch:
+    inputs:
+      force_notify:
+        description: Send the current latest Instagram post to Slack as a manual test
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -38,7 +44,15 @@ jobs:
           EOF
 
       - name: Run notifier
-        run: python instagram_slack_notifier.py --config "$RUNNER_TEMP/config.json"
+        shell: bash
+        run: |
+          args=(--config "$RUNNER_TEMP/config.json")
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_notify }}" = "true" ]; then
+            args+=(--force-notify)
+          fi
+
+          python instagram_slack_notifier.py "${args[@]}"
 
       - name: Commit updated state
         shell: bash

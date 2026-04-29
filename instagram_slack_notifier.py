@@ -43,6 +43,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fetch and print the latest detected post without sending to Slack.",
     )
+    parser.add_argument(
+        "--force-notify",
+        action="store_true",
+        help="Send the latest post to Slack even if it is not new.",
+    )
     return parser.parse_args()
 
 
@@ -101,11 +106,23 @@ def format_timestamp(timestamp: int) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def build_slack_payload(profile_url: str, username: str, post: Post) -> dict[str, Any]:
+def build_slack_payload(
+    profile_url: str,
+    username: str,
+    post: Post,
+    force_notify: bool = False,
+) -> dict[str, Any]:
     caption = post.caption if post.caption else "(No caption)"
     pinned_text = "Yes" if post.is_pinned else "No"
+    title = f"@{username} new post"
+    summary = "Instagram update detected"
+
+    if force_notify:
+        title = f"@{username} manual test"
+        summary = "Instagram notifier test"
+
     text = (
-        f"Instagram update detected: @{username}\n"
+        f"{summary}: @{username}\n"
         f"Post: {post.permalink}\n"
         f"Time: {format_timestamp(post.timestamp)}"
     )
@@ -115,17 +132,20 @@ def build_slack_payload(profile_url: str, username: str, post: Post) -> dict[str
         "blocks": [
             {
                 "type": "header",
-                "text": {"type": "plain_text", "text": f"@{username} new post"},
+                "text": {"type": "plain_text", "text": title},
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
+                        ("*Run type*\nManual test notification\n\n" if force_notify else "")
+                        + (
                         f"*Profile*\n<{profile_url}|@{username}>\n\n"
                         f"*Post link*\n<{post.permalink}|Open post>\n\n"
                         f"*Published at*\n{format_timestamp(post.timestamp)}\n\n"
                         f"*Pinned post*\n{pinned_text}"
+                        )
                     ),
                 },
                 "accessory": {
@@ -231,6 +251,27 @@ def main() -> int:
         return 0
 
     previous_post_id = load_previous_post_id(state_path)
+    if args.force_notify:
+        if not webhook_url:
+            print("Missing slack_webhook_url in config.json.", file=sys.stderr)
+            return 1
+
+        try:
+            payload = build_slack_payload(
+                profile_url=profile_url,
+                username=username,
+                post=post,
+                force_notify=True,
+            )
+            post_to_slack(webhook_url, payload)
+        except (urllib.error.URLError, RuntimeError) as exc:
+            print(f"Failed to post to Slack: {exc}", file=sys.stderr)
+            return 1
+
+        save_post_state(state_path, post)
+        print("Manual test notification sent to Slack.")
+        return 0
+
     if previous_post_id == post.post_id:
         print("No new Instagram post found. Slack message was not sent.")
         return 0

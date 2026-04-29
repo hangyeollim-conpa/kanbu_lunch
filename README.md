@@ -20,6 +20,7 @@ This repository checks the public Instagram profile `@lunch11_14` and sends a Sl
 - The workflow runs every day at `02:00 UTC`
 - That equals `11:00 Asia/Seoul`
 - You can also run it manually from the `Actions` tab with `Run workflow`
+- Manual runs send the latest post to Slack by default so you can confirm the bot is working
 - GitHub scheduled workflows can start a few minutes late, so treat `11:00` as approximate
 
 ## First run behavior
@@ -27,6 +28,7 @@ This repository checks the public Instagram profile `@lunch11_14` and sends a Sl
 - On the first run, the workflow saves the current latest Instagram post as the baseline
 - The first run does not send a Slack message
 - After that, only newer posts trigger Slack alerts
+- A manual run with `force_notify` enabled sends a test notification even when nothing new was posted
 
 ## Optional local test
 
@@ -36,6 +38,12 @@ This repository checks the public Instagram profile `@lunch11_14` and sends a Sl
 
 ```powershell
 python .\instagram_slack_notifier.py --config .\config.json --dry-run
+```
+
+To send a local test Slack message with the latest post:
+
+```powershell
+python .\instagram_slack_notifier.py --config .\config.json --force-notify
 ```
 
 ## Notes
