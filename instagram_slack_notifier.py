@@ -226,54 +226,16 @@ def build_slack_payload(
     post: Post,
     force_notify: bool = False,
 ) -> dict[str, Any]:
-    caption = post.caption if post.caption else "(No caption)"
-    pinned_text = "Yes" if post.is_pinned else "No"
-    title = f"@{username} new post"
-    summary = "Instagram update detected"
-
-    if force_notify:
-        title = f"@{username} manual test"
-        summary = "Instagram notifier test"
-
-    text = (
-        f"{summary}: @{username}\n"
-        f"Post: {post.permalink}\n"
-        f"Time: {format_timestamp(post.timestamp)}"
-    )
+    summary = "Instagram notifier test" if force_notify else "Instagram update detected"
+    text = f"{summary}: @{username} {post.permalink}"
 
     return {
         "text": text,
         "blocks": [
             {
-                "type": "header",
-                "text": {"type": "plain_text", "text": title},
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        ("*Run type*\nManual test notification\n\n" if force_notify else "")
-                        + (
-                        f"*Profile*\n<{profile_url}|@{username}>\n\n"
-                        f"*Post link*\n<{post.permalink}|Open post>\n\n"
-                        f"*Published at*\n{format_timestamp(post.timestamp)}\n\n"
-                        f"*Pinned post*\n{pinned_text}"
-                        )
-                    ),
-                },
-                "accessory": {
-                    "type": "image",
-                    "image_url": post.display_url,
-                    "alt_text": f"{username} latest post",
-                },
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*Caption*\n```{caption[:2900]}```",
-                },
+                "type": "image",
+                "image_url": post.display_url,
+                "alt_text": f"{username} Instagram post",
             },
         ],
     }
