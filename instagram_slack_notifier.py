@@ -13,8 +13,29 @@ from typing import Any
 DEFAULT_CONFIG_NAME = "config.json"
 DEFAULT_STATE_NAME = ".instagram_state.json"
 INSTAGRAM_APP_ID = "936619743392459"
-INSTAGRAM_URL_TEMPLATE = (
-    "https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+INSTAGRAM_URL_TEMPLATES = (
+    "https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
+    "https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
+)
+INSTAGRAM_REQUEST_HEADERS = (
+    {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Mobile/15E148 Safari/604.1"
+        ),
+        "x-ig-app-id": INSTAGRAM_APP_ID,
+        "x-asbd-id": "129477",
+        "accept-language": "en-US,en;q=0.9",
+        "accept": "*/*",
+        "x-requested-with": "XMLHttpRequest",
+    },
+    {
+        "User-Agent": "Mozilla/5.0",
+        "x-ig-app-id": INSTAGRAM_APP_ID,
+        "accept-language": "en-US,en;q=0.9",
+        "accept": "*/*",
+    },
 )
 
 
@@ -63,16 +84,46 @@ def save_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def fetch_instagram_profile(username: str) -> dict[str, Any]:
-    url = INSTAGRAM_URL_TEMPLATE.format(username=urllib.parse.quote(username))
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "x-ig-app-id": INSTAGRAM_APP_ID,
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    last_error: Exception | None = None
+    encoded_username = urllib.parse.quote(username)
+    referer = f"https://www.instagram.com/{username}/"
+
+    for url_template in INSTAGRAM_URL_TEMPLATES:
+        url = url_template.format(username=encoded_username)
+
+        for header_template in INSTAGRAM_REQUEST_HEADERS:
+            headers = dict(header_template)
+            headers["referer"] = referer
+            request = urllib.request.Request(url, headers=headers)
+
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    body = response.read().decode("utf-8")
+            except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+                last_error = exc
+                continue
+
+            if not body.strip():
+                last_error = RuntimeError(f"Empty response body from {url}")
+                continue
+
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                continue
+
+            if payload.get("status") != "ok" or "data" not in payload:
+                last_error = RuntimeError(f"Unexpected Instagram payload from {url}")
+                continue
+
+            print(f"Fetched Instagram profile from {url}")
+            return payload
+
+    if last_error is None:
+        raise RuntimeError("Instagram profile request failed for an unknown reason.")
+
+    raise RuntimeError(f"Instagram profile request failed after fallback attempts: {last_error}")
 
 
 def extract_latest_post(profile_data: dict[str, Any]) -> Post:
