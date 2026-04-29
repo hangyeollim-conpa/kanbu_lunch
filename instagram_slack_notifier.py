@@ -13,7 +13,11 @@ from typing import Any
 DEFAULT_CONFIG_NAME = "config.json"
 DEFAULT_STATE_NAME = ".instagram_state.json"
 INSTAGRAM_APP_ID = "936619743392459"
-INSTAGRAM_URL_TEMPLATES = (
+INSTAGRAM_FEED_URL_TEMPLATES = (
+    "https://i.instagram.com/api/v1/feed/user/{username}/username/?count=12",
+    "https://www.instagram.com/api/v1/feed/user/{username}/username/?count=12",
+)
+INSTAGRAM_PROFILE_URL_TEMPLATES = (
     "https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
     "https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
 )
@@ -83,42 +87,63 @@ def save_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
 
 
+def print_json(payload: dict[str, Any]) -> None:
+    try:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    except UnicodeEncodeError:
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
+
+
 def fetch_instagram_profile(username: str) -> dict[str, Any]:
     last_error: Exception | None = None
     encoded_username = urllib.parse.quote(username)
     referer = f"https://www.instagram.com/{username}/"
 
-    for url_template in INSTAGRAM_URL_TEMPLATES:
-        url = url_template.format(username=encoded_username)
+    for url_templates, expected_payload in (
+        (INSTAGRAM_FEED_URL_TEMPLATES, "feed"),
+        (INSTAGRAM_PROFILE_URL_TEMPLATES, "profile"),
+    ):
+        for url_template in url_templates:
+            url = url_template.format(username=encoded_username)
 
-        for header_template in INSTAGRAM_REQUEST_HEADERS:
-            headers = dict(header_template)
-            headers["referer"] = referer
-            request = urllib.request.Request(url, headers=headers)
+            for header_template in INSTAGRAM_REQUEST_HEADERS:
+                headers = dict(header_template)
+                headers["referer"] = referer
+                request = urllib.request.Request(url, headers=headers)
 
-            try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    body = response.read().decode("utf-8")
-            except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-                last_error = exc
-                continue
+                try:
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        body = response.read().decode("utf-8")
+                except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+                    last_error = exc
+                    continue
 
-            if not body.strip():
-                last_error = RuntimeError(f"Empty response body from {url}")
-                continue
+                if not body.strip():
+                    last_error = RuntimeError(f"Empty response body from {url}")
+                    continue
 
-            try:
-                payload = json.loads(body)
-            except json.JSONDecodeError as exc:
-                last_error = exc
-                continue
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError as exc:
+                    last_error = exc
+                    continue
 
-            if payload.get("status") != "ok" or "data" not in payload:
-                last_error = RuntimeError(f"Unexpected Instagram payload from {url}")
-                continue
+                if payload.get("status") != "ok":
+                    last_error = RuntimeError(f"Unexpected Instagram payload from {url}")
+                    continue
 
-            print(f"Fetched Instagram profile from {url}")
-            return payload
+                if expected_payload == "feed" and payload.get("items"):
+                    print(f"Fetched Instagram feed from {url}")
+                    return payload
+
+                if expected_payload == "profile" and "data" in payload:
+                    print(f"Fetched Instagram profile from {url}")
+                    return payload
+
+                if expected_payload == "feed":
+                    last_error = RuntimeError(f"Instagram feed response contained no items: {url}")
+                else:
+                    last_error = RuntimeError(f"Instagram profile response contained no data: {url}")
 
     if last_error is None:
         raise RuntimeError("Instagram profile request failed for an unknown reason.")
@@ -127,6 +152,44 @@ def fetch_instagram_profile(username: str) -> dict[str, Any]:
 
 
 def extract_latest_post(profile_data: dict[str, Any]) -> Post:
+    if profile_data.get("items"):
+        return extract_latest_post_from_feed(profile_data)
+
+    return extract_latest_post_from_profile(profile_data)
+
+
+def extract_latest_post_from_feed(feed_data: dict[str, Any]) -> Post:
+    items = feed_data["items"]
+
+    if not items:
+        raise RuntimeError("No posts were found in the Instagram feed response.")
+
+    user_id = str(feed_data.get("user", {}).get("pk", ""))
+
+    def to_post(item: dict[str, Any]) -> Post:
+        caption_data = item.get("caption")
+        caption = caption_data.get("text", "") if isinstance(caption_data, dict) else ""
+        shortcode = item["code"]
+        image_candidates = item.get("image_versions2", {}).get("candidates", [])
+        display_url = image_candidates[0]["url"] if image_candidates else item.get("display_uri", "")
+        pinned_user_ids = {str(value) for value in item.get("timeline_pinned_user_ids", [])}
+        is_pinned = bool(user_id and user_id in pinned_user_ids)
+
+        return Post(
+            post_id=str(item.get("pk") or item["id"]),
+            shortcode=shortcode,
+            permalink=f"https://www.instagram.com/p/{shortcode}/",
+            timestamp=int(item["taken_at"]),
+            caption=caption.strip(),
+            display_url=display_url,
+            is_pinned=is_pinned,
+        )
+
+    posts = [to_post(item) for item in items]
+    return max(posts, key=lambda post: post.timestamp)
+
+
+def extract_latest_post_from_profile(profile_data: dict[str, Any]) -> Post:
     user = profile_data["data"]["user"]
     edges = user["edge_owner_to_timeline_media"]["edges"]
 
@@ -282,20 +345,16 @@ def main() -> int:
         print(f"Failed to fetch Instagram profile: {exc}", file=sys.stderr)
         return 1
 
-    print(
-        json.dumps(
-            {
-                "latest_post_id": post.post_id,
-                "shortcode": post.shortcode,
-                "permalink": post.permalink,
-                "timestamp": post.timestamp,
-                "formatted_time": format_timestamp(post.timestamp),
-                "is_pinned": post.is_pinned,
-                "caption": post.caption,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+    print_json(
+        {
+            "latest_post_id": post.post_id,
+            "shortcode": post.shortcode,
+            "permalink": post.permalink,
+            "timestamp": post.timestamp,
+            "formatted_time": format_timestamp(post.timestamp),
+            "is_pinned": post.is_pinned,
+            "caption": post.caption,
+        }
     )
 
     if args.dry_run:
