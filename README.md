@@ -1,6 +1,6 @@
 # Instagram to Slack Notifier
 
-This repository checks the public Instagram profile `@lunch11_14` and sends a Slack message only when a newer post appears.
+This repository checks the public Instagram profile `@lunch11_14` and sends one Slack message around 11:00 Asia/Seoul if a newer post exists since the previous daily check.
 
 ## Files
 
@@ -19,6 +19,7 @@ This repository checks the public Instagram profile `@lunch11_14` and sends a Sl
 
 - The workflow runs every day at `02:00 UTC`
 - That equals `11:00 Asia/Seoul`
+- Automatic runs only notify once per Seoul day, after the 11:00 check window opens
 - You can also run it manually from the `Actions` tab with `Run workflow`
 - Manual runs send the latest post to Slack by default so you can confirm the bot is working
 - GitHub scheduled workflows can start a few minutes late, so treat `11:00` as approximate
@@ -27,7 +28,7 @@ This repository checks the public Instagram profile `@lunch11_14` and sends a Sl
 
 - On the first run, the workflow saves the current latest Instagram post as the baseline
 - The first run does not send a Slack message
-- After that, only newer posts trigger Slack alerts
+- After that, the script only posts the latest update found during the day's 11:00 Asia/Seoul check
 - A manual run with `force_notify` enabled sends a test notification even when nothing new was posted
 
 ## Optional local test

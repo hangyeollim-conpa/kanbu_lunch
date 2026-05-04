@@ -8,11 +8,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 DEFAULT_CONFIG_NAME = "config.json"
 DEFAULT_STATE_NAME = ".instagram_state.json"
 INSTAGRAM_APP_ID = "936619743392459"
+KST = ZoneInfo("Asia/Seoul")
+NOTIFICATION_HOUR_KST = 11
 INSTAGRAM_FEED_URL_TEMPLATES = (
     "https://i.instagram.com/api/v1/feed/user/{username}/username/?count=12",
     "https://www.instagram.com/api/v1/feed/user/{username}/username/?count=12",
@@ -92,6 +95,10 @@ def print_json(payload: dict[str, Any]) -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     except UnicodeEncodeError:
         print(json.dumps(payload, ensure_ascii=True, indent=2))
+
+
+def now_kst() -> datetime:
+    return datetime.now(KST)
 
 
 def fetch_instagram_profile(username: str) -> dict[str, Any]:
@@ -216,8 +223,8 @@ def extract_latest_post_from_profile(profile_data: dict[str, Any]) -> Post:
 
 
 def format_timestamp(timestamp: int) -> str:
-    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone()
-    return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone(KST)
+    return dt.strftime("%Y-%m-%d %H:%M:%S KST")
 
 
 def build_slack_payload(
@@ -260,23 +267,47 @@ def resolve_path(base_dir: Path, value: str) -> Path:
     return path if path.is_absolute() else base_dir / path
 
 
-def load_previous_post_id(state_path: Path) -> str | None:
-    if not state_path.exists():
-        return None
+def load_state(state_path: Path) -> dict[str, Any]:
+    if state_path.exists():
+        return load_json(state_path)
+    return {}
 
-    state = load_json(state_path)
-    previous_post_id = state.get("last_seen_post_id")
+
+def load_previous_post_id(state: dict[str, Any]) -> str | None:
+    previous_post_id = state.get("last_notified_post_id")
+    if previous_post_id is None:
+        previous_post_id = state.get("last_seen_post_id")
     return str(previous_post_id) if previous_post_id is not None else None
 
 
-def save_post_state(state_path: Path, post: Post) -> None:
+def load_last_automated_check_date(state: dict[str, Any]) -> str | None:
+    value = state.get("last_automated_check_date")
+    return str(value) if value else None
+
+
+def save_state(
+    state_path: Path,
+    state: dict[str, Any],
+    *,
+    post: Post | None = None,
+    automated_check_date: str | None = None,
+) -> None:
+    next_state = dict(state)
+
+    if post is not None:
+        next_state["last_notified_post_id"] = post.post_id
+        next_state["last_notified_shortcode"] = post.shortcode
+        next_state["last_notified_timestamp"] = post.timestamp
+        next_state["last_seen_post_id"] = post.post_id
+        next_state["last_seen_shortcode"] = post.shortcode
+        next_state["last_seen_timestamp"] = post.timestamp
+
+    if automated_check_date is not None:
+        next_state["last_automated_check_date"] = automated_check_date
+
     save_json(
         state_path,
-        {
-            "last_seen_post_id": post.post_id,
-            "last_seen_shortcode": post.shortcode,
-            "last_seen_timestamp": post.timestamp,
-        },
+        next_state,
     )
 
 
@@ -322,7 +353,11 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    previous_post_id = load_previous_post_id(state_path)
+    state = load_state(state_path)
+    previous_post_id = load_previous_post_id(state)
+    last_automated_check_date = load_last_automated_check_date(state)
+    current_kst = now_kst()
+    current_kst_date = current_kst.date().isoformat()
     if args.force_notify:
         if not webhook_url:
             print("Missing slack_webhook_url in config.json.", file=sys.stderr)
@@ -340,17 +375,40 @@ def main() -> int:
             print(f"Failed to post to Slack: {exc}", file=sys.stderr)
             return 1
 
-        save_post_state(state_path, post)
-        print("Manual test notification sent to Slack.")
+        print("Manual test notification sent to Slack. Automated state was not changed.")
+        return 0
+
+    if current_kst.hour < NOTIFICATION_HOUR_KST:
+        print(
+            "Waiting for the 11:00 KST notification window. "
+            f"Current Asia/Seoul time: {current_kst.strftime('%Y-%m-%d %H:%M:%S KST')}"
+        )
+        return 0
+
+    if last_automated_check_date == current_kst_date:
+        print(
+            "Today's automatic 11:00 KST check has already been completed. "
+            "Slack message was not sent."
+        )
         return 0
 
     if previous_post_id == post.post_id:
-        print("No new Instagram post found. Slack message was not sent.")
+        save_state(
+            state_path,
+            state,
+            automated_check_date=current_kst_date,
+        )
+        print("No new Instagram post found since the last 11:00 KST notification.")
         return 0
 
     if previous_post_id is None and not notify_on_first_run:
-        save_post_state(state_path, post)
-        print("First run detected. State saved without sending a Slack message.")
+        save_state(
+            state_path,
+            state,
+            post=post,
+            automated_check_date=current_kst_date,
+        )
+        print("First scheduled 11:00 KST run detected. State saved without sending a Slack message.")
         return 0
 
     if not webhook_url:
@@ -368,8 +426,13 @@ def main() -> int:
         print(f"Failed to post to Slack: {exc}", file=sys.stderr)
         return 1
 
-    save_post_state(state_path, post)
-    print("New Instagram post found and sent to Slack.")
+    save_state(
+        state_path,
+        state,
+        post=post,
+        automated_check_date=current_kst_date,
+    )
+    print("Latest Instagram post was sent for today's 11:00 KST check.")
     return 0
 
 
