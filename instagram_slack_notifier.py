@@ -378,9 +378,9 @@ def main() -> int:
         print("Manual test notification sent to Slack. Automated state was not changed.")
         return 0
 
-    if current_kst.hour < NOTIFICATION_HOUR_KST:
+    if current_kst.hour != NOTIFICATION_HOUR_KST:
         print(
-            "Waiting for the 11:00 KST notification window. "
+            "Outside the 11:00 KST notification window. "
             f"Current Asia/Seoul time: {current_kst.strftime('%Y-%m-%d %H:%M:%S KST')}"
         )
         return 0

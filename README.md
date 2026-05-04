@@ -17,9 +17,9 @@ This repository checks the public Instagram profile `@lunch11_14` and sends one 
 
 ## Schedule
 
-- The workflow runs every day at `02:00 UTC`
-- That equals `11:00 Asia/Seoul`
-- Automatic runs only notify once per Seoul day, after the 11:00 check window opens
+- The workflow tries during the `11:00` hour in `Asia/Seoul`
+- GitHub Actions starts runs at `11:05`, `11:15`, `11:25`, `11:35`, `11:45`, and `11:55` KST
+- The script only allows automatic notifications during the `11:00` KST hour and still sends at most once per day
 - You can also run it manually from the `Actions` tab with `Run workflow`
 - Manual runs send the latest post to Slack by default so you can confirm the bot is working
 - GitHub scheduled workflows can start a few minutes late, so treat `11:00` as approximate

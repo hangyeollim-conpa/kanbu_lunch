@@ -2,8 +2,9 @@ name: Instagram Slack Notifier
 
 on:
   schedule:
-    # 11:00 Asia/Seoul = 02:00 UTC
-    - cron: "0 2 * * *"
+    # Try multiple times during the 11:00 KST hour to reduce GitHub schedule drift.
+    - cron: "5-55/10 11 * * *"
+      timezone: "Asia/Seoul"
   workflow_dispatch:
     inputs:
       force_notify:
