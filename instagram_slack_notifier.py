@@ -15,7 +15,10 @@ DEFAULT_CONFIG_NAME = "config.json"
 DEFAULT_STATE_NAME = ".instagram_state.json"
 INSTAGRAM_APP_ID = "936619743392459"
 KST = ZoneInfo("Asia/Seoul")
-NOTIFICATION_HOUR_KST = 11
+NOTIFICATION_START_HOUR_KST = 10
+NOTIFICATION_START_MINUTE_KST = 30
+NOTIFICATION_END_HOUR_KST = 11
+NOTIFICATION_END_MINUTE_KST = 0
 INSTAGRAM_FEED_URL_TEMPLATES = (
     "https://i.instagram.com/api/v1/feed/user/{username}/username/?count=12",
     "https://www.instagram.com/api/v1/feed/user/{username}/username/?count=12",
@@ -99,6 +102,13 @@ def print_json(payload: dict[str, Any]) -> None:
 
 def now_kst() -> datetime:
     return datetime.now(KST)
+
+
+def is_automatic_notification_window(current_kst: datetime) -> bool:
+    current_time = (current_kst.hour, current_kst.minute)
+    start_time = (NOTIFICATION_START_HOUR_KST, NOTIFICATION_START_MINUTE_KST)
+    end_time = (NOTIFICATION_END_HOUR_KST, NOTIFICATION_END_MINUTE_KST)
+    return start_time <= current_time <= end_time
 
 
 def fetch_instagram_profile(username: str) -> dict[str, Any]:
@@ -378,16 +388,16 @@ def main() -> int:
         print("Manual test notification sent to Slack. Automated state was not changed.")
         return 0
 
-    if current_kst.hour != NOTIFICATION_HOUR_KST:
+    if not is_automatic_notification_window(current_kst):
         print(
-            "Outside the 11:00 KST notification window. "
+            "Outside the 10:30-11:00 KST notification window. "
             f"Current Asia/Seoul time: {current_kst.strftime('%Y-%m-%d %H:%M:%S KST')}"
         )
         return 0
 
     if last_automated_check_date == current_kst_date:
         print(
-            "Today's automatic 11:00 KST check has already been completed. "
+            "Today's automatic 10:30-11:00 KST check has already been completed. "
             "Slack message was not sent."
         )
         return 0
@@ -398,7 +408,7 @@ def main() -> int:
             state,
             automated_check_date=current_kst_date,
         )
-        print("No new Instagram post found since the last 11:00 KST notification.")
+        print("No new Instagram post found since the last 10:30-11:00 KST notification.")
         return 0
 
     if previous_post_id is None and not notify_on_first_run:
@@ -408,7 +418,7 @@ def main() -> int:
             post=post,
             automated_check_date=current_kst_date,
         )
-        print("First scheduled 11:00 KST run detected. State saved without sending a Slack message.")
+        print("First scheduled 10:30-11:00 KST run detected. State saved without sending a Slack message.")
         return 0
 
     if not webhook_url:
@@ -432,7 +442,7 @@ def main() -> int:
         post=post,
         automated_check_date=current_kst_date,
     )
-    print("Latest Instagram post was sent for today's 11:00 KST check.")
+    print("Latest Instagram post was sent for today's 10:30-11:00 KST check.")
     return 0
 
 

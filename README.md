@@ -1,6 +1,6 @@
 # Instagram to Slack Notifier
 
-This repository checks the public Instagram profile `@lunch11_14` and sends one Slack message around 11:00 Asia/Seoul if a newer post exists since the previous daily check.
+This repository checks the public Instagram profile `@lunch11_14` and sends one Slack message during the 10:30-11:00 Asia/Seoul window if a newer post exists since the previous daily check.
 
 ## Files
 
@@ -17,9 +17,9 @@ This repository checks the public Instagram profile `@lunch11_14` and sends one 
 
 ## Schedule
 
-- The workflow tries during the `11:00` hour in `Asia/Seoul`
-- GitHub Actions starts runs at `11:05`, `11:15`, `11:25`, `11:35`, `11:45`, and `11:55` KST
-- The script only allows automatic notifications during the `11:00` KST hour and still sends at most once per day
+- The workflow tries during the `10:30-11:00` window in `Asia/Seoul`
+- GitHub Actions starts runs at `10:30`, `10:35`, `10:40`, `10:45`, `10:50`, and `10:55` KST
+- The script only allows automatic notifications during the `10:30-11:00` KST window and still sends at most once per day
 - You can also run it manually from the `Actions` tab with `Run workflow`
 - Manual runs send the latest post to Slack by default so you can confirm the bot is working
 - GitHub scheduled workflows can start a few minutes late, so treat `11:00` as approximate
@@ -28,7 +28,7 @@ This repository checks the public Instagram profile `@lunch11_14` and sends one 
 
 - On the first run, the workflow saves the current latest Instagram post as the baseline
 - The first run does not send a Slack message
-- After that, the script only posts the latest update found during the day's 11:00 Asia/Seoul check
+- After that, the script only posts the latest update found during the day's 10:30-11:00 Asia/Seoul check
 - A manual run with `force_notify` enabled sends a test notification even when nothing new was posted
 
 ## Optional local test
