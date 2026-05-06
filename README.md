@@ -8,21 +8,43 @@ This repository checks the public Instagram profile `@lunch11_14` and sends one 
 - `config.example.json`: optional local test config template
 - `.github/workflows/instagram-slack-notifier.yml`: daily GitHub Actions workflow
 
-## GitHub Actions setup
+## Trigger setup
 
 1. Open the repository on GitHub
 2. Go to `Settings` -> `Secrets and variables` -> `Actions`
 3. Add a new repository secret named `SLACK_WEBHOOK_URL`
 4. Paste your Slack Incoming Webhook URL
+5. Create a GitHub fine-grained personal access token for this repository with `Contents: Write`
+6. In `cron-job.org`, create a daily job that sends a `POST` request to:
+
+```text
+https://api.github.com/repos/hangyeollim-conpa/kanbu_lunch/dispatches
+```
+
+7. Use these headers in `cron-job.org`:
+
+```text
+Accept: application/vnd.github+json
+Authorization: Bearer YOUR_GITHUB_TOKEN
+Content-Type: application/json
+X-GitHub-Api-Version: 2026-03-10
+```
+
+8. Use this JSON request body:
+
+```json
+{"event_type":"instagram-slack-notifier"}
+```
 
 ## Schedule
 
-- The workflow tries during the `10:30-11:00` window in `Asia/Seoul`
-- GitHub Actions starts runs at `10:38`, `10:46`, and `10:54` KST
+- `cron-job.org` should call the workflow during the `10:30-11:00` window in `Asia/Seoul`
+- A simple recommendation is `10:38` every day
+- If you want extra redundancy, add additional `cron-job.org` jobs at `10:46` and `10:54`
 - The script only allows automatic notifications during the `10:30-11:00` KST window and still sends at most once per day
 - You can also run it manually from the `Actions` tab with `Run workflow`
 - Manual runs send the latest post to Slack by default so you can confirm the bot is working
-- GitHub scheduled workflows can start a few minutes late, so treat `11:00` as approximate
+- GitHub Actions no longer handles the clock-based schedule directly
 
 ## First run behavior
 
