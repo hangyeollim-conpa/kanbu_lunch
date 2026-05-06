@@ -2,10 +2,8 @@ name: Instagram Slack Notifier
 
 on:
   schedule:
-    # Try multiple times between 10:30 and 11:00 KST.
-    - cron: "30-55/5 10 * * *"
-      timezone: "Asia/Seoul"
-    - cron: "0 11 * * *"
+    # Try at off-peak minutes within the 10:30-11:00 KST window.
+    - cron: "38,46,54 10 * * *"
       timezone: "Asia/Seoul"
   workflow_dispatch:
     inputs:
