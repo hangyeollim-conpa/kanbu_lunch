@@ -5,6 +5,8 @@ on:
     # Try multiple times between 10:30 and 11:00 KST.
     - cron: "30-55/5 10 * * *"
       timezone: "Asia/Seoul"
+    - cron: "0 11 * * *"
+      timezone: "Asia/Seoul"
   workflow_dispatch:
     inputs:
       force_notify:
