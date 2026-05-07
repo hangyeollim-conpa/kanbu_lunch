@@ -38,13 +38,14 @@ X-GitHub-Api-Version: 2026-03-10
 
 ## Schedule
 
-- `cron-job.org` should call the workflow during the `10:30-11:00` window in `Asia/Seoul`
-- A simple recommendation is `10:38` every day
+- The workflow also has a GitHub Actions fallback schedule at `10:38`, `10:46`, and `10:54` KST
+- `cron-job.org` can call the same workflow during the `10:30-11:00` window in `Asia/Seoul`
+- A simple `cron-job.org` recommendation is `10:38` every day
 - If you want extra redundancy, add additional `cron-job.org` jobs at `10:46` and `10:54`
 - The script only allows automatic notifications during the `10:30-11:00` KST window and still sends at most once per day
 - You can also run it manually from the `Actions` tab with `Run workflow`
 - Manual runs send the latest post to Slack by default so you can confirm the bot is working
-- GitHub Actions no longer handles the clock-based schedule directly
+- If both GitHub schedule and `cron-job.org` trigger on the same day, the script still sends at most once
 
 ## First run behavior
 

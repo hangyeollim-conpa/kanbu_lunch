@@ -1,6 +1,10 @@
 name: Instagram Slack Notifier
 
 on:
+  schedule:
+    # Fallback schedule in case cron-job.org is not configured or misses a day.
+    - cron: "38,46,54 10 * * *"
+      timezone: "Asia/Seoul"
   repository_dispatch:
     types:
       - instagram-slack-notifier
