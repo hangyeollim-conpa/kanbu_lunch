@@ -2,62 +2,22 @@ import argparse
 import json
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from instagram_browser import fetch_latest_public_post
+from instagram_client import Post
 
 DEFAULT_CONFIG_NAME = "config.json"
 DEFAULT_STATE_NAME = ".instagram_state.json"
-INSTAGRAM_APP_ID = "936619743392459"
 KST = ZoneInfo("Asia/Seoul")
 NOTIFICATION_START_HOUR_KST = 10
 NOTIFICATION_START_MINUTE_KST = 30
 NOTIFICATION_END_HOUR_KST = 11
 NOTIFICATION_END_MINUTE_KST = 0
-INSTAGRAM_FEED_URL_TEMPLATES = (
-    "https://i.instagram.com/api/v1/feed/user/{username}/username/?count=12",
-    "https://www.instagram.com/api/v1/feed/user/{username}/username/?count=12",
-)
-INSTAGRAM_PROFILE_URL_TEMPLATES = (
-    "https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
-    "https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
-)
-INSTAGRAM_REQUEST_HEADERS = (
-    {
-        "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
-            "Mobile/15E148 Safari/604.1"
-        ),
-        "x-ig-app-id": INSTAGRAM_APP_ID,
-        "x-asbd-id": "129477",
-        "accept-language": "en-US,en;q=0.9",
-        "accept": "*/*",
-        "x-requested-with": "XMLHttpRequest",
-    },
-    {
-        "User-Agent": "Mozilla/5.0",
-        "x-ig-app-id": INSTAGRAM_APP_ID,
-        "accept-language": "en-US,en;q=0.9",
-        "accept": "*/*",
-    },
-)
-
-
-@dataclass
-class Post:
-    post_id: str
-    shortcode: str
-    permalink: str
-    timestamp: int
-    caption: str
-    display_url: str
-    is_pinned: bool
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,129 +71,10 @@ def is_automatic_notification_window(current_kst: datetime) -> bool:
     return start_time <= current_time <= end_time
 
 
-def fetch_instagram_profile(username: str) -> dict[str, Any]:
-    last_error: Exception | None = None
-    encoded_username = urllib.parse.quote(username)
-    referer = f"https://www.instagram.com/{username}/"
-
-    for url_templates, expected_payload in (
-        (INSTAGRAM_FEED_URL_TEMPLATES, "feed"),
-        (INSTAGRAM_PROFILE_URL_TEMPLATES, "profile"),
-    ):
-        for url_template in url_templates:
-            url = url_template.format(username=encoded_username)
-
-            for header_template in INSTAGRAM_REQUEST_HEADERS:
-                headers = dict(header_template)
-                headers["referer"] = referer
-                request = urllib.request.Request(url, headers=headers)
-
-                try:
-                    with urllib.request.urlopen(request, timeout=30) as response:
-                        body = response.read().decode("utf-8")
-                except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-                    last_error = exc
-                    continue
-
-                if not body.strip():
-                    last_error = RuntimeError(f"Empty response body from {url}")
-                    continue
-
-                try:
-                    payload = json.loads(body)
-                except json.JSONDecodeError as exc:
-                    last_error = exc
-                    continue
-
-                if payload.get("status") != "ok":
-                    last_error = RuntimeError(f"Unexpected Instagram payload from {url}")
-                    continue
-
-                if expected_payload == "feed" and payload.get("items"):
-                    print(f"Fetched Instagram feed from {url}")
-                    return payload
-
-                if expected_payload == "profile" and "data" in payload:
-                    print(f"Fetched Instagram profile from {url}")
-                    return payload
-
-                if expected_payload == "feed":
-                    last_error = RuntimeError(f"Instagram feed response contained no items: {url}")
-                else:
-                    last_error = RuntimeError(f"Instagram profile response contained no data: {url}")
-
-    if last_error is None:
-        raise RuntimeError("Instagram profile request failed for an unknown reason.")
-
-    raise RuntimeError(f"Instagram profile request failed after fallback attempts: {last_error}")
-
-
-def extract_latest_post(profile_data: dict[str, Any]) -> Post:
-    if profile_data.get("items"):
-        return extract_latest_post_from_feed(profile_data)
-
-    return extract_latest_post_from_profile(profile_data)
-
-
-def extract_latest_post_from_feed(feed_data: dict[str, Any]) -> Post:
-    items = feed_data["items"]
-
-    if not items:
-        raise RuntimeError("No posts were found in the Instagram feed response.")
-
-    user_id = str(feed_data.get("user", {}).get("pk", ""))
-
-    def to_post(item: dict[str, Any]) -> Post:
-        caption_data = item.get("caption")
-        caption = caption_data.get("text", "") if isinstance(caption_data, dict) else ""
-        shortcode = item["code"]
-        image_candidates = item.get("image_versions2", {}).get("candidates", [])
-        display_url = image_candidates[0]["url"] if image_candidates else item.get("display_uri", "")
-        pinned_user_ids = {str(value) for value in item.get("timeline_pinned_user_ids", [])}
-        is_pinned = bool(user_id and user_id in pinned_user_ids)
-
-        return Post(
-            post_id=str(item.get("pk") or item["id"]),
-            shortcode=shortcode,
-            permalink=f"https://www.instagram.com/p/{shortcode}/",
-            timestamp=int(item["taken_at"]),
-            caption=caption.strip(),
-            display_url=display_url,
-            is_pinned=is_pinned,
-        )
-
-    posts = [to_post(item) for item in items]
-    return max(posts, key=lambda post: post.timestamp)
-
-
-def extract_latest_post_from_profile(profile_data: dict[str, Any]) -> Post:
-    user = profile_data["data"]["user"]
-    edges = user["edge_owner_to_timeline_media"]["edges"]
-
-    if not edges:
-        raise RuntimeError("No posts were found on the Instagram profile.")
-
-    def to_post(edge: dict[str, Any]) -> Post:
-        node = edge["node"]
-        caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
-        caption = caption_edges[0]["node"]["text"] if caption_edges else ""
-        shortcode = node["shortcode"]
-        return Post(
-            post_id=node["id"],
-            shortcode=shortcode,
-            permalink=f"https://www.instagram.com/p/{shortcode}/",
-            timestamp=int(node["taken_at_timestamp"]),
-            caption=caption.strip(),
-            display_url=node.get("display_url", ""),
-            is_pinned=bool(node.get("pinned_for_users")),
-        )
-
-    posts = [to_post(edge) for edge in edges]
-    return max(posts, key=lambda post: post.timestamp)
-
-
-def format_timestamp(timestamp: int) -> str:
-    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone(KST)
+def format_timestamp(timestamp: int, precision: str = "second") -> str:
+    if precision == "day":
+        return datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%d (publication date)")
+    dt = datetime.fromtimestamp(timestamp, tz=UTC).astimezone(KST)
     return dt.strftime("%Y-%m-%d %H:%M:%S KST")
 
 
@@ -290,8 +131,8 @@ def load_previous_post_id(state: dict[str, Any]) -> str | None:
     return str(previous_post_id) if previous_post_id is not None else None
 
 
-def load_last_automated_check_date(state: dict[str, Any]) -> str | None:
-    value = state.get("last_automated_check_date")
+def load_last_automated_notification_date(state: dict[str, Any]) -> str | None:
+    value = state.get("last_automated_notification_date")
     return str(value) if value else None
 
 
@@ -300,7 +141,7 @@ def save_state(
     state: dict[str, Any],
     *,
     post: Post | None = None,
-    automated_check_date: str | None = None,
+    automated_notification_date: str | None = None,
 ) -> None:
     next_state = dict(state)
 
@@ -311,9 +152,10 @@ def save_state(
         next_state["last_seen_post_id"] = post.post_id
         next_state["last_seen_shortcode"] = post.shortcode
         next_state["last_seen_timestamp"] = post.timestamp
+        next_state["last_notified_timestamp_precision"] = post.timestamp_precision
 
-    if automated_check_date is not None:
-        next_state["last_automated_check_date"] = automated_check_date
+    if automated_notification_date is not None:
+        next_state["last_automated_notification_date"] = automated_notification_date
 
     save_json(
         state_path,
@@ -341,9 +183,22 @@ def main() -> int:
     profile_url = config["instagram_profile_url"]
     webhook_url = config.get("slack_webhook_url", "")
 
+    state = load_state(state_path) if not args.dry_run else {}
+    previous_post_id = load_previous_post_id(state)
+    current_kst = now_kst()
+    if not args.dry_run and not args.force_notify:
+        if not is_automatic_notification_window(current_kst):
+            print(
+                "Outside the 10:30-11:00 KST notification window; no Instagram request made. "
+                f"Current Asia/Seoul time: {current_kst.strftime('%Y-%m-%d %H:%M:%S KST')}"
+            )
+            return 0
+        if load_last_automated_notification_date(state) == current_kst.date().isoformat():
+            print("Today's automatic notification was already sent; no Instagram request made.")
+            return 0
+
     try:
-        profile_data = fetch_instagram_profile(username)
-        post = extract_latest_post(profile_data)
+        post = fetch_latest_public_post(username)
     except (KeyError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
         print(f"Failed to fetch Instagram profile: {exc}", file=sys.stderr)
         return 1
@@ -354,7 +209,8 @@ def main() -> int:
             "shortcode": post.shortcode,
             "permalink": post.permalink,
             "timestamp": post.timestamp,
-            "formatted_time": format_timestamp(post.timestamp),
+            "formatted_time": format_timestamp(post.timestamp, post.timestamp_precision),
+            "timestamp_precision": post.timestamp_precision,
             "is_pinned": post.is_pinned,
             "caption": post.caption,
         }
@@ -363,9 +219,6 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    state = load_state(state_path)
-    previous_post_id = load_previous_post_id(state)
-    last_automated_check_date = load_last_automated_check_date(state)
     current_kst = now_kst()
     current_kst_date = current_kst.date().isoformat()
     if args.force_notify:
@@ -395,20 +248,9 @@ def main() -> int:
         )
         return 0
 
-    if last_automated_check_date == current_kst_date:
-        print(
-            "Today's automatic 10:30-11:00 KST check has already been completed. "
-            "Slack message was not sent."
-        )
-        return 0
-
-    if previous_post_id == post.post_id:
-        save_state(
-            state_path,
-            state,
-            automated_check_date=current_kst_date,
-        )
-        print("No new Instagram post found since the last 10:30-11:00 KST notification.")
+    previous_shortcode = state.get("last_notified_shortcode", state.get("last_seen_shortcode"))
+    if previous_post_id == post.post_id or previous_shortcode == post.shortcode:
+        print("No new Instagram post found. Later scheduled checks can still send an update.")
         return 0
 
     if previous_post_id is None and not notify_on_first_run:
@@ -416,9 +258,10 @@ def main() -> int:
             state_path,
             state,
             post=post,
-            automated_check_date=current_kst_date,
         )
-        print("First scheduled 10:30-11:00 KST run detected. State saved without sending a Slack message.")
+        print(
+            "First scheduled 10:30-11:00 KST run detected. State saved without sending a Slack message."
+        )
         return 0
 
     if not webhook_url:
@@ -440,7 +283,7 @@ def main() -> int:
         state_path,
         state,
         post=post,
-        automated_check_date=current_kst_date,
+        automated_notification_date=current_kst_date,
     )
     print("Latest Instagram post was sent for today's 10:30-11:00 KST check.")
     return 0
