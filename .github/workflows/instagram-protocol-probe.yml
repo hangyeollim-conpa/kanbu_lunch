@@ -29,8 +29,8 @@ jobs:
           before = state.read_bytes()
           post = fetch_latest_public_post('lunch11_14')
           print('LATEST', post.shortcode, post.timestamp, flush=True)
-          assert post.shortcode == 'DdQhOznzUAw', 'MATCHING FAILED: differs from PC verification'
-          assert post.timestamp == 1789368204, 'MATCHING FAILED: publication timestamp differs'
+          assert post.shortcode == 'DdTGcFvz696', 'MATCHING FAILED: differs from PC verification'
+          assert post.timestamp == 1789454821, 'MATCHING FAILED: publication timestamp differs'
           with urllib.request.urlopen(post.display_url, timeout=30) as image:
               body = image.read()
               print('IMAGE', image.status, image.headers.get('Content-Type'), len(body),
@@ -40,3 +40,4 @@ jobs:
           assert state.read_bytes() == before
           print('VERIFIED: actual cloud post and image; no Slack request; state unchanged')
           PY
+
