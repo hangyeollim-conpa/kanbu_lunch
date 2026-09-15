@@ -39,6 +39,17 @@ jobs:
                       page.get_by_role("button", name="form-btn").click()
                   response = pending.value
                   print("FEED_HTTP", response.status, flush=True)
+                  if response.status != 200:
+                      error = response.json()
+                      print("ERROR_KEYS", list(error) if isinstance(error, dict) else type(error).__name__)
+                      for key in ("message", "error", "detail", "status"):
+                          value = error.get(key) if isinstance(error, dict) else None
+                          if isinstance(value, str):
+                              markers = [word for word in ("private", "not found", "rate", "limit",
+                                  "signature", "time", "missing", "blocked", "invalid", "try again",
+                                  "unavailable", "captcha", "validation", "token", "username")
+                                  if word in value.lower()]
+                              print("ERROR_MARKERS", key, markers)
                   assert response.status == 200
                   nodes = [edge["node"] for edge in response.json()["result"]["edges"]]
                   assert nodes and all(n["owner"]["username"] == "lunch11_14" for n in nodes)
