@@ -51,9 +51,6 @@ jobs:
       - name: Install runtime dependencies
         run: uv sync --locked --no-dev
 
-      - name: Install Chromium
-        run: uv run --no-dev playwright install --with-deps chromium
-
       - name: Create runtime config
         shell: bash
         env:
@@ -79,6 +76,7 @@ jobs:
       - name: Run notifier
         shell: bash
         env:
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
           DRY_RUN: ${{ inputs.dry_run }}
           FORCE_NOTIFY: ${{ inputs.force_notify }}

@@ -2,24 +2,27 @@
 
 This repository checks the public Instagram profile `@lunch11_14` and sends its latest post image to Slack during the 10:30-11:00 Asia/Seoul window. It checks again when no new post is found and stops automatic notifications after a successful delivery that day.
 
-## Instagram access status
+## Instagram access
 
-The notifier opens the ordinary public profile in an anonymous Chromium browser and reads the visible post tiles. It does not require control of the restaurant account or an Instagram login. Chromium runs JavaScript because the initial HTML alone does not contain the menu tiles.
+The notifier uses Apify's official `apify/instagram-scraper` to read this public profile from the cloud. It requires an Apify Free account and the GitHub Actions secret `APIFY_TOKEN`, in addition to `SLACK_WEBHOOK_URL`. No Instagram login, account ownership, Facebook page, always-on PC, or private server is needed.
 
-It selects the newest publication date from the visible image descriptions, so an old pinned notice is not selected merely because it comes first. These dates have day precision and can differ from the menu date printed inside an image. If the newest date has multiple distinct posts, dates are missing, or login is required, retrieval fails without sending or changing state. Public-page markup and access can change; local browser success does not establish availability on a GitHub runner.
+Each check requests up to 12 posts and selects the unique newest exact publication timestamp, ignoring pinned order. Missing data, another account, conflicting timestamps, and invalid image URLs fail explicitly. It never switches to an old cached dataset or another scraper after failure.
 
-The old internal API client is retained for regression coverage, but the notifier no longer calls it. Its recent hosted requests returned HTTP 429 and a local request returned HTTP 401; these responses alone do not establish an IP ban. The browser does not fall back to those endpoints, reuse login cookies, or bypass login challenges.
+The returned regional image CDN may be IPv6-only. The adapter uses `scontent.cdninstagram.com` while preserving the exact signed image path and query. This is CDN host normalization, not substitution of a different post or image. The browser and legacy API readers remain only for diagnosis and regression tests.
 
-## Repair verification (2026-09-11)
+### Free limits
 
-The updated CLI successfully retrieved public post `DdGPb7EzO7R` in a local anonymous Chromium dry-run. Its publication date is September 9; the image contains the September 11 menu. No Slack message was sent and the existing state file was unchanged.
+The [Apify Free plan](https://apify.com/pricing) includes $5 of monthly usage without a card. Each run has a hard `$0.04` usage cap and 120-second timeout, with no automatic restart. At the verified Free price of $0.0027 per post, 12 results cost at most $0.0324; four checks per day for 31 days cost about $4.02. Successful daily delivery suppresses later checks, reducing actual usage. Other Apify tasks and manual dry-runs share the same free credits. Keep the account on Free; exhaustion blocks service until credits renew instead of requiring a paid upgrade.
 
-These changes are local and have not been deployed. The GitHub account available during this repair has repository read access (`pull: true`, `push: false`), so a repository writer must apply the changes to `main` and run the workflow with `dry_run` enabled to verify retrieval on GitHub's runner. This user-account permission is separate from the workflow's `contents: write` permission used to save state. Hosted browser retrieval remains unverified.
+### Recovery evidence
+
+See [the investigation report](DIAGNOSTICS-2026-09-15.md) for local, hosted, image, and delivery evidence separately. A successful CI or outside-window skip does not establish delivery. No Slack test message was authorized during this repair.
 
 ## Files
 
 - `instagram_slack_notifier.py`: main checker script
-- `instagram_browser.py`: anonymous public profile browser reader
+- `instagram_apify.py`: bounded cloud retrieval and exact-time selection
+- `instagram_browser.py`: diagnostic anonymous browser reader
 - `instagram_public.py`: typed public tile parsing and latest-date selection
 - `instagram_client.py`: shared post model and legacy API client
 - `config.example.json`: optional local test config template
@@ -32,14 +35,15 @@ These changes are local and have not been deployed. The GitHub account available
 2. Go to `Settings` -> `Secrets and variables` -> `Actions`
 3. Add a new repository secret named `SLACK_WEBHOOK_URL`
 4. Paste your Slack Incoming Webhook URL
-5. Create a GitHub fine-grained personal access token for this repository with `Contents: Write`
-6. In `cron-job.org`, create a daily job that sends a `POST` request to:
+5. Add `APIFY_TOKEN` from your Apify Free account as another repository secret.
+6. Create a GitHub fine-grained personal access token for this repository with `Contents: Write`
+7. In `cron-job.org`, create a daily job that sends a `POST` request to:
 
 ```text
 https://api.github.com/repos/hangyeollim-conpa/kanbu_lunch/dispatches
 ```
 
-7. Use these headers in `cron-job.org`:
+8. Use these headers in `cron-job.org`:
 
 ```text
 Accept: application/vnd.github+json
@@ -48,7 +52,7 @@ Content-Type: application/json
 X-GitHub-Api-Version: 2026-03-10
 ```
 
-8. Use this JSON request body:
+9. Use this JSON request body:
 
 ```json
 {"event_type":"instagram-slack-notifier"}
@@ -58,8 +62,7 @@ X-GitHub-Api-Version: 2026-03-10
 
 - The workflow also has a GitHub Actions fallback schedule at `10:38`, `10:46`, and `10:54` KST
 - `cron-job.org` can call the same workflow during the `10:30-11:00` window in `Asia/Seoul`
-- A simple `cron-job.org` recommendation is `10:38` every day
-- If you want extra redundancy, add additional `cron-job.org` jobs at `10:46` and `10:54`
+- The existing external job runs around 10:43 KST on weekdays; retain that configuration.
 - The script checks the automatic time window before contacting Instagram and again after retrieval. Runs outside the window log a skip; an Actions success alone does not prove delivery.
 - A check with no new post leaves the state unchanged, allowing a later check to catch a new menu.
 - Once a successful automatic delivery is saved for the day, further automatic runs skip without contacting Instagram.
@@ -70,7 +73,7 @@ X-GitHub-Api-Version: 2026-03-10
 
 ## State and delivery guarantees
 
-The state file records `last_automated_notification_date` only after Slack delivery succeeds. The old `last_automated_check_date` is retained but no longer used to suppress a day. Existing numeric post IDs and saved shortcodes are both checked for deduplication when switching to the public browser source. Publication timestamps from public tiles are UTC midnight date labels, recorded with `last_notified_timestamp_precision: "day"`; they do not represent the exact posting time. On the migration day, a different post can be sent even if the legacy check marker is already today, because that marker cannot establish whether a message was sent.
+The state file records `last_automated_notification_date` only after Slack delivery succeeds. The legacy `last_automated_check_date` does not suppress delivery. Both numeric IDs and shortcodes preserve deduplication across source changes. A different candidate must also be newer than the saved timestamp; stale or ambiguous results fail without sending or changing state. Apify timestamps have second precision. Legacy day-precision state requires a candidate beyond that whole day to prove it is newer.
 
 The workflow persists state to `main`, retrying a rejected push up to three times. It rebases only if remote history has moved forward without changing the state file; it refuses conflicting state rather than overwriting another writer.
 
@@ -86,20 +89,14 @@ This is not an exactly-once delivery guarantee. A crash, lost Slack response, or
 
 ## Optional local test
 
-Python 3.12 or later, Playwright Chromium, and the locked Python dependencies are required. Install them with [uv](https://docs.astral.sh/uv/) and [Playwright](https://playwright.dev/python/docs/library):
+Python 3.12 or later and the locked dependencies are required. Supply `APIFY_TOKEN` securely in the environment; never commit it to a config or print it. No local browser installation is required for normal operation.
 
 ```sh
 uv sync --locked
-uv run playwright install chromium
-```
-
-On Linux runners, use `uv run playwright install --with-deps chromium`. The workflow installs these dependencies automatically.
-
-To inspect Instagram without sending or modifying state (no Slack credential needed):
-
-```sh
 uv run python instagram_slack_notifier.py --config config.example.json --dry-run
 ```
+
+On Windows without an IANA timezone database, add `--with tzdata` to `uv run`. Browser diagnosis additionally needs `uv run playwright install chromium`.
 
 For a manual delivery, first copy `config.example.json` to `config.json` and set your real Slack webhook URL. A normal run observes the time window and deduplication rules:
 
@@ -123,3 +120,4 @@ uv run basedpyright
 ```
 
 Tests isolate Instagram and Slack, use temporary state files, and exercise the workflow's actual Bash against temporary local Git remotes. They require no secrets and send no real Slack messages. Runtime and development dependencies are locked in `uv.lock`.
+

@@ -141,3 +141,30 @@ def test_manual_modes_preserve_state(
     assert result == 0
     assert state_path.read_text(encoding="utf-8") == saved
     assert len(deliveries) == (1 if option == "--force-notify" else 0)
+
+
+@pytest.mark.parametrize(
+    "timestamp,precision,candidate",
+    [
+        (300, "second", 200),
+        (300, "second", 300),
+        (300, "day", 400),
+        ("bad", "second", 400),
+    ],
+)
+def test_stale_or_ambiguous_candidate_preserves_state(
+    config_path, provide_post, deliveries, timestamp, precision, candidate
+):
+    state_path = config_path.parent / "state.json"
+    original = json.dumps(
+        {
+            "last_notified_post_id": "previous",
+            "last_notified_timestamp": timestamp,
+            "last_notified_timestamp_precision": precision,
+        }
+    )
+    state_path.write_text(original, encoding="utf-8")
+    provide_post("different", candidate)
+    assert app.main() == 1
+    assert deliveries == []
+    assert state_path.read_text(encoding="utf-8") == original
