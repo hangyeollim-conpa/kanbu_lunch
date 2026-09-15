@@ -1,0 +1,37 @@
+name: Instagram protocol probe
+on:
+  push:
+    branches: [codex/instagram-host-comparison]
+    paths: [.github/workflows/instagram-protocol-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inspect public HTTP responses without browser or credentials
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import urllib.request
+          import urllib.error
+
+          for url in ["https://www.instagram.com/lunch11_14/",
+                      "https://www.instagram.com/lunch11_14/embed/"]:
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      body = response.read()
+                      print(json.dumps({"url": url, "status": response.status,
+                          "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
+                          "known_latest_present": b"DdQhOznzUAw" in body,
+                          "broken_embed": b"EmbedIsBroken" in body,
+                          "has_taken_at": b"taken_at" in body}))
+              except urllib.error.HTTPError as error:
+                  print(json.dumps({"url": url, "status": error.code,
+                                    "retry_after": error.headers.get("retry-after")}))
+          PY
