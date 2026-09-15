@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -58,6 +59,11 @@ def select_latest_apify_post(username: str, body: bytes) -> Post:
         except ValueError:
             raise PublicProfileError("MATCHING FAILED: invalid publication timestamp.") from None
         validate_image_url(item.image_url)
+        # Regional CDN hosts can be IPv6-only. Preserve the signed resource exactly
+        # and use Instagram's globally routed image host for Slack's image fetch.
+        image_url = urlunsplit(
+            urlsplit(item.image_url)._replace(netloc="scontent.cdninstagram.com")
+        )
         posts.append(
             Post(
                 item.post_id,
@@ -65,7 +71,7 @@ def select_latest_apify_post(username: str, body: bytes) -> Post:
                 permalink,
                 int(published.timestamp()),
                 item.caption,
-                item.image_url,
+                image_url,
                 None,
             )
         )

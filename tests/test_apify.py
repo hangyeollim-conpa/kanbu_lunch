@@ -84,3 +84,14 @@ def test_request_has_bounded_cost_no_token_in_url_and_no_retry(monkeypatch):
         assert "test-token" not in request.full_url
         assert request.get_header("Authorization") == "Bearer test-token"
         assert json.loads(request.data)["resultsLimit"] == 12
+
+
+def test_regional_cdn_normalization_preserves_exact_signed_resource():
+    post = item() | {
+        "displayUrl": "https://instagram.fcps4-2.fna.fbcdn.net/v/menu.heic?stp=dst-jpg&oh=signed"
+    }
+    selected = select_latest_apify_post("lunch11_14", json.dumps([post]).encode())
+    assert (
+        selected.display_url
+        == "https://scontent.cdninstagram.com/v/menu.heic?stp=dst-jpg&oh=signed"
+    )

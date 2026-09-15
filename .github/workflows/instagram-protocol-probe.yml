@@ -16,7 +16,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --no-dev
-      - name: Verify cloud retrieval and image without Slack or state writes
+      - name: Verify globally routed Instagram CDN with existing scraped post
         env:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: |
@@ -54,3 +54,4 @@ jobs:
           name: public-post-diagnostic
           path: public-post.json
           retention-days: 1
+
