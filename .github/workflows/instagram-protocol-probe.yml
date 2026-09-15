@@ -21,13 +21,20 @@ jobs:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: |
           uv run --locked --no-dev python - <<'PY'
-          import hashlib
+          import hashlib, json, os, socket
+          from urllib.parse import urlsplit
+          from dataclasses import asdict
           import urllib.request
           from pathlib import Path
-          from instagram_apify import fetch_latest_public_post
+          from instagram_apify import select_latest_apify_post
           state = Path('.instagram_state.json')
           before = state.read_bytes()
-          post = fetch_latest_public_post('lunch11_14')
+          request = urllib.request.Request('https://api.apify.com/v2/acts/apify~instagram-scraper/runs/last/dataset/items?status=SUCCEEDED', headers={'Authorization': 'Bearer ' + os.environ['APIFY_TOKEN']})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              post = select_latest_apify_post('lunch11_14', response.read())
+          Path('public-post.json').write_text(json.dumps(asdict(post)))
+          host = urlsplit(post.display_url).hostname
+          print('IMAGE_HOST', host, socket.getaddrinfo(host, 443), flush=True)
           print('LATEST', post.shortcode, post.timestamp, flush=True)
           assert post.shortcode == 'DdTGcFvz696', 'MATCHING FAILED: differs from PC verification'
           assert post.timestamp == 1789454821, 'MATCHING FAILED: publication timestamp differs'
@@ -41,3 +48,9 @@ jobs:
           print('VERIFIED: actual cloud post and image; no Slack request; state unchanged')
           PY
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-post-diagnostic
+          path: public-post.json
+          retention-days: 1
