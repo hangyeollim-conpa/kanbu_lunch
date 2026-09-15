@@ -33,10 +33,29 @@ def test_public_browser_reads_tiles_without_opening_post_details() -> None:
 def test_public_browser_stops_on_http_denial(status: int) -> None:
     page = MagicMock(spec=Page)
     page.goto.return_value.status = status
+    page.goto.return_value.all_headers.return_value = {}
+    page.goto.return_value.body.return_value = b""
     with pytest.raises(PublicProfileError, match=f"HTTP {status}"):
         read_public_profile(page, "test_lunch")
     page.goto.assert_called_once()
     page.locator.assert_not_called()
+
+
+def test_http_diagnostics_keep_evidence_without_session_secrets(capsys) -> None:
+    page = MagicMock(spec=Page)
+    page.goto.return_value.status = 429
+    page.goto.return_value.all_headers.return_value = {
+        "retry-after": "600", "set-cookie": "secret-cookie",
+    }
+    page.goto.return_value.body.return_value = b"Too many requests. secret-token"
+    with pytest.raises(PublicProfileError, match="HTTP 429"):
+        read_public_profile(page, "test_lunch")
+    output = capsys.readouterr().err
+    assert '"retry-after": "600"' in output
+    assert '"too many requests"' in output
+    assert '"body_sha256"' in output
+    assert "secret" not in output
+    page.goto.assert_called_once()
 
 
 def test_public_browser_refuses_login_redirect() -> None:

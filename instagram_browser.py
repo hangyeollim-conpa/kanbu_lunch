@@ -1,7 +1,10 @@
+import hashlib
+import json
 import re
+import sys
 
 from playwright.sync_api import Error as BrowserError
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page, Response, sync_playwright
 
 from instagram_client import Post
 from instagram_public import PublicProfileError, select_latest_public_post
@@ -15,6 +18,41 @@ TILE_SCRIPT = """links => JSON.stringify(links.flatMap(link => {
 }))"""
 
 
+def log_http_diagnostics(response: Response) -> None:
+    headers = response.all_headers()
+    details: dict[str, object] = {
+        "status": response.status,
+        "headers": {
+            key: headers[key]
+            for key in (
+                "date", "retry-after", "content-type", "server",
+                "x-ig-error-code", "x-fb-error-code", "ratelimit-limit",
+                "ratelimit-remaining", "ratelimit-reset",
+            )
+            if key in headers
+        },
+    }
+    try:
+        body = response.body()
+        text = body.decode("utf-8", errors="replace").lower()
+        # Only known messages are logged: raw HTML can contain session tokens.
+        details.update({
+            "body_bytes": len(body),
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "body_markers": [
+                marker for marker in (
+                    "too many requests", "please wait a few minutes",
+                    "try again later", "rate limit", "feedback_required",
+                    "login_required", "challenge_required", "sentry_block",
+                    "ip address", "automated behavior", "temporarily blocked",
+                ) if marker in text
+            ],
+        })
+    except BrowserError:
+        details["body_unavailable"] = True
+    print("Instagram HTTP diagnostics: " + json.dumps(details), file=sys.stderr)
+
+
 def read_public_profile(page: Page, username: str) -> Post:
     if re.fullmatch(r"[A-Za-z0-9_.]{1,30}", username) is None:
         raise PublicProfileError("Invalid Instagram username.")
@@ -25,6 +63,8 @@ def read_public_profile(page: Page, username: str) -> Post:
     )
     if response is None or response.status >= 400:
         status = response.status if response is not None else "unavailable"
+        if response is not None:
+            log_http_diagnostics(response)
         raise PublicProfileError(f"Public profile returned HTTP {status}; no retries attempted.")
     if "/accounts/login" in page.url or "/challenge" in page.url:
         raise PublicProfileError("Public profile requires login or verification.")
