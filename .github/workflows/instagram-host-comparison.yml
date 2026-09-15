@@ -1,0 +1,27 @@
+name: Instagram host comparison
+
+on:
+  push:
+    branches: [codex/instagram-host-comparison]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --no-dev
+      - run: uv run --locked --no-dev playwright install chromium
+      - name: Single anonymous dry run without Slack credentials
+        run: uv run --locked --no-dev --with tzdata python instagram_slack_notifier.py --config config.example.json --dry-run
