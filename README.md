@@ -1,12 +1,30 @@
 # Instagram to Slack Notifier
 
-This repository checks the public Instagram profile `@lunch11_14` and sends one Slack message during the 10:30-11:00 Asia/Seoul window if a newer post exists since the previous daily check.
+This repository checks the public Instagram profile `@lunch11_14` and sends its latest post image to Slack during the 10:30-11:00 Asia/Seoul window. It checks again when no new post is found and stops automatic notifications after a successful delivery that day.
+
+## Instagram access status
+
+The notifier opens the ordinary public profile in an anonymous Chromium browser and reads the visible post tiles. It does not require control of the restaurant account or an Instagram login. Chromium runs JavaScript because the initial HTML alone does not contain the menu tiles.
+
+It selects the newest publication date from the visible image descriptions, so an old pinned notice is not selected merely because it comes first. These dates have day precision and can differ from the menu date printed inside an image. If the newest date has multiple distinct posts, dates are missing, or login is required, retrieval fails without sending or changing state. Public-page markup and access can change; local browser success does not establish availability on a GitHub runner.
+
+The old internal API client is retained for regression coverage, but the notifier no longer calls it. Its recent hosted requests returned HTTP 429 and a local request returned HTTP 401; these responses alone do not establish an IP ban. The browser does not fall back to those endpoints, reuse login cookies, or bypass login challenges.
+
+## Repair verification (2026-09-11)
+
+The updated CLI successfully retrieved public post `DdGPb7EzO7R` in a local anonymous Chromium dry-run. Its publication date is September 9; the image contains the September 11 menu. No Slack message was sent and the existing state file was unchanged.
+
+These changes are local and have not been deployed. The GitHub account available during this repair has repository read access (`pull: true`, `push: false`), so a repository writer must apply the changes to `main` and run the workflow with `dry_run` enabled to verify retrieval on GitHub's runner. This user-account permission is separate from the workflow's `contents: write` permission used to save state. Hosted browser retrieval remains unverified.
 
 ## Files
 
 - `instagram_slack_notifier.py`: main checker script
+- `instagram_browser.py`: anonymous public profile browser reader
+- `instagram_public.py`: typed public tile parsing and latest-date selection
+- `instagram_client.py`: shared post model and legacy API client
 - `config.example.json`: optional local test config template
 - `.github/workflows/instagram-slack-notifier.yml`: daily GitHub Actions workflow
+- `.github/workflows/tests.yml`: isolated regression tests on Python 3.12–3.14
 
 ## Trigger setup
 
@@ -42,36 +60,66 @@ X-GitHub-Api-Version: 2026-03-10
 - `cron-job.org` can call the same workflow during the `10:30-11:00` window in `Asia/Seoul`
 - A simple `cron-job.org` recommendation is `10:38` every day
 - If you want extra redundancy, add additional `cron-job.org` jobs at `10:46` and `10:54`
-- The script only allows automatic notifications during the `10:30-11:00` KST window and still sends at most once per day
+- The script checks the automatic time window before contacting Instagram and again after retrieval. Runs outside the window log a skip; an Actions success alone does not prove delivery.
+- A check with no new post leaves the state unchanged, allowing a later check to catch a new menu.
+- Once a successful automatic delivery is saved for the day, further automatic runs skip without contacting Instagram.
 - You can also run it manually from the `Actions` tab with `Run workflow`
-- Manual runs send the latest post to Slack by default so you can confirm the bot is working
-- If both GitHub schedule and `cron-job.org` trigger on the same day, the script still sends at most once
+- Manual runs default to `dry_run`: inspect the latest post without Slack delivery or state changes. To send a manual test, disable `dry_run` and enable `force_notify`.
+- All workflow triggers share one concurrency group, including manual tests. A running sender is never cancelled by a newer trigger.
+- GitHub schedules can run late. Keep the external scheduler configured for checks within the window; this workflow cannot guarantee an exact execution minute.
+
+## State and delivery guarantees
+
+The state file records `last_automated_notification_date` only after Slack delivery succeeds. The old `last_automated_check_date` is retained but no longer used to suppress a day. Existing numeric post IDs and saved shortcodes are both checked for deduplication when switching to the public browser source. Publication timestamps from public tiles are UTC midnight date labels, recorded with `last_notified_timestamp_precision: "day"`; they do not represent the exact posting time. On the migration day, a different post can be sent even if the legacy check marker is already today, because that marker cannot establish whether a message was sent.
+
+The workflow persists state to `main`, retrying a rejected push up to three times. It rebases only if remote history has moved forward without changing the state file; it refuses conflicting state rather than overwriting another writer.
+
+This is not an exactly-once delivery guarantee. A crash, lost Slack response, or state-persistence failure after Slack accepts a message can leave delivery uncertain and allow a duplicate on a later run. Check Slack and the Actions logs before rerunning such failures. Workflow concurrency does not lock independent local processes or copies of this repository.
 
 ## First run behavior
 
 - On the first run, the workflow saves the current latest Instagram post as the baseline
 - The first run does not send a Slack message
+- A later new post on the same day can still be sent; saving a baseline does not mark that day as notified.
 - After that, the script only posts the latest update found during the day's 10:30-11:00 Asia/Seoul check
-- A manual run with `force_notify` enabled sends a test notification even when nothing new was posted
+- A manual run with `dry_run` disabled and `force_notify` enabled sends a test notification even when nothing new was posted
 
 ## Optional local test
 
-1. Copy `config.example.json` to `config.json`
-2. Replace `slack_webhook_url` with your real Slack Incoming Webhook URL
-3. Run:
+Python 3.12 or later, Playwright Chromium, and the locked Python dependencies are required. Install them with [uv](https://docs.astral.sh/uv/) and [Playwright](https://playwright.dev/python/docs/library):
+
+```sh
+uv sync --locked
+uv run playwright install chromium
+```
+
+On Linux runners, use `uv run playwright install --with-deps chromium`. The workflow installs these dependencies automatically.
+
+To inspect Instagram without sending or modifying state (no Slack credential needed):
+
+```sh
+uv run python instagram_slack_notifier.py --config config.example.json --dry-run
+```
+
+For a manual delivery, first copy `config.example.json` to `config.json` and set your real Slack webhook URL. A normal run observes the time window and deduplication rules:
 
 ```powershell
-python .\instagram_slack_notifier.py --config .\config.json --dry-run
+uv run python .\instagram_slack_notifier.py --config .\config.json
 ```
 
 To send a local test Slack message with the latest post:
 
 ```powershell
-python .\instagram_slack_notifier.py --config .\config.json --force-notify
+uv run python .\instagram_slack_notifier.py --config .\config.json --force-notify
 ```
 
-## Notes
+## Development checks
 
-- This setup uses Instagram's public web profile data instead of the official Instagram Graph API
-- The target profile is currently public, so the lightweight approach works well
-- If Instagram changes the web response format later, the script may need a small update
+```sh
+uv sync --locked
+uv run pytest
+uv run ruff check .
+uv run basedpyright
+```
+
+Tests isolate Instagram and Slack, use temporary state files, and exercise the workflow's actual Bash against temporary local Git remotes. They require no secrets and send no real Slack messages. Runtime and development dependencies are locked in `uv.lock`.

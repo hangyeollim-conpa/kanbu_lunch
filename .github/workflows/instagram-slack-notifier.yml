@@ -10,6 +10,11 @@ on:
       - instagram-slack-notifier
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: Inspect the latest Instagram post without sending Slack or saving state
+        required: false
+        type: boolean
+        default: true
       force_notify:
         description: Send the current latest Instagram post to Slack as a manual test
         required: false
@@ -18,6 +23,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: instagram-slack-notifier-main
+  cancel-in-progress: false
 
 jobs:
   notify:
@@ -36,29 +45,55 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install runtime dependencies
+        run: uv sync --locked --no-dev
+
+      - name: Install Chromium
+        run: uv run --no-dev playwright install --with-deps chromium
+
       - name: Create runtime config
         shell: bash
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          cat > "$RUNNER_TEMP/config.json" <<EOF
-          {
-            "instagram_username": "lunch11_14",
-            "instagram_profile_url": "https://www.instagram.com/lunch11_14/",
-            "slack_webhook_url": "${{ secrets.SLACK_WEBHOOK_URL }}",
-            "state_file": "${{ github.workspace }}/.instagram_state.json",
-            "notify_on_first_run": false
+          umask 077
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config = {
+              "instagram_username": "lunch11_14",
+              "instagram_profile_url": "https://www.instagram.com/lunch11_14/",
+              "slack_webhook_url": os.environ["SLACK_WEBHOOK_URL"],
+              "state_file": str(Path(os.environ["GITHUB_WORKSPACE"]) / ".instagram_state.json"),
+              "notify_on_first_run": False,
           }
-          EOF
+          path = Path(os.environ["RUNNER_TEMP"]) / "config.json"
+          path.write_text(json.dumps(config), encoding="utf-8")
+          PY
 
       - name: Run notifier
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORCE_NOTIFY: ${{ inputs.force_notify }}
         run: |
           args=(--config "$RUNNER_TEMP/config.json")
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_notify }}" = "true" ]; then
-            args+=(--force-notify)
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              args+=(--dry-run)
+            elif [ "$FORCE_NOTIFY" = "true" ]; then
+              args+=(--force-notify)
+            fi
           fi
 
-          python instagram_slack_notifier.py "${args[@]}"
+          uv run --locked --no-dev python instagram_slack_notifier.py "${args[@]}"
 
       - name: Commit updated state
         shell: bash
@@ -70,6 +105,28 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          state_base=$(git rev-parse HEAD)
           git add .instagram_state.json
           git commit -m "Update Instagram notifier state"
-          git push origin "HEAD:${TARGET_BRANCH}"
+
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${TARGET_BRANCH}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::State push failed after three attempts; check delivery before rerunning."
+              exit 1
+            fi
+            git fetch origin "$TARGET_BRANCH"
+            remote_head=$(git rev-parse FETCH_HEAD)
+            if ! git merge-base --is-ancestor "$state_base" "$remote_head" ||
+               ! git diff --quiet "$state_base" "$remote_head" -- .instagram_state.json; then
+              echo "::error::Remote state or history changed; refusing to overwrite it. Check delivery before rerunning."
+              exit 1
+            fi
+            if ! git rebase "$remote_head"; then
+              git rebase --abort
+              echo "::error::Could not rebase notifier state. Check delivery before rerunning."
+              exit 1
+            fi
+          done

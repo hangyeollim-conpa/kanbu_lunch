@@ -1,2 +1,5 @@
 __pycache__/
 config.json
+.venv/
+.pytest_cache/
+.ruff_cache/
