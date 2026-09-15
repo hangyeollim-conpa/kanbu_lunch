@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   probe:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -16,58 +16,27 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --no-dev
-      - run: uv run --locked --no-dev playwright install chromium
-      - name: Verify public viewer data and actual image without Slack
-        shell: bash
+      - name: Verify cloud retrieval and image without Slack or state writes
+        env:
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: |
           uv run --locked --no-dev python - <<'PY'
           import hashlib
-          import re
           import urllib.request
-          from playwright.sync_api import sync_playwright
-
-          with sync_playwright() as runtime:
-              browser = runtime.chromium.launch()
-              try:
-                  page = browser.new_context(locale="en-US").new_page()
-                  response = page.goto("https://picuki.site/instagram-profile-viewer",
-                                       wait_until="networkidle", timeout=45000)
-                  print("VIEWER_HTTP", response.status, flush=True)
-                  assert response.status == 200
-                  with page.expect_response(lambda r: r.url ==
-                          "https://api-wh.picuki.site/api/v1/instagram/postsV2",
-                          timeout=30000) as pending:
-                      page.get_by_placeholder("@username or link").fill("lunch11_14")
-                      page.get_by_role("button", name="form-btn").click()
-                  response = pending.value
-                  print("FEED_HTTP", response.status, flush=True)
-                  if response.status != 200:
-                      error = response.json()
-                      print("ERROR_KEYS", list(error) if isinstance(error, dict) else type(error).__name__)
-                      for key in ("message", "error", "detail", "status", "info", "code"):
-                          value = error.get(key) if isinstance(error, dict) else None
-                          if isinstance(value, (int, str)) and len(str(value)) < 300:
-                              safe = re.sub(r"[A-Za-z0-9_=/+-]{24,}", "[REDACTED]", str(value))
-                              if "<" not in safe and "http" not in safe:
-                                  print("ERROR_DETAIL", key, safe)
-                          if isinstance(value, str):
-                              markers = [word for word in ("private", "not found", "rate", "limit",
-                                  "signature", "time", "missing", "blocked", "invalid", "try again",
-                                  "unavailable", "captcha", "validation", "token", "username")
-                                  if word in value.lower()]
-                              print("ERROR_MARKERS", key, markers)
-                  assert response.status == 200
-                  nodes = [edge["node"] for edge in response.json()["result"]["edges"]]
-                  assert nodes and all(n["owner"]["username"] == "lunch11_14" for n in nodes)
-                  latest = max(nodes, key=lambda node: node["taken_at_timestamp"])
-                  print("LATEST", latest["shortcode"], latest["taken_at_timestamp"], flush=True)
-                  assert latest["shortcode"] == "DdQhOznzUAw"
-                  assert latest["taken_at_timestamp"] == 1789368204
-                  with urllib.request.urlopen(latest["display_url"], timeout=30) as image:
-                      body = image.read()
-                      print("IMAGE", image.status, image.headers.get("content-type"),
-                            len(body), hashlib.sha256(body).hexdigest())
-                      assert image.status == 200 and body.startswith(b"\xff\xd8\xff")
-              finally:
-                  browser.close()
+          from pathlib import Path
+          from instagram_apify import fetch_latest_public_post
+          state = Path('.instagram_state.json')
+          before = state.read_bytes()
+          post = fetch_latest_public_post('lunch11_14')
+          print('LATEST', post.shortcode, post.timestamp, flush=True)
+          assert post.shortcode == 'DdQhOznzUAw', 'MATCHING FAILED: differs from PC verification'
+          assert post.timestamp == 1789368204, 'MATCHING FAILED: publication timestamp differs'
+          with urllib.request.urlopen(post.display_url, timeout=30) as image:
+              body = image.read()
+              print('IMAGE', image.status, image.headers.get('Content-Type'), len(body),
+                    hashlib.sha256(body).hexdigest(), flush=True)
+              assert image.status == 200 and image.headers.get_content_type().startswith('image/')
+              assert body.startswith(b'\xff\xd8\xff'), 'MATCHING FAILED: not the expected JPEG'
+          assert state.read_bytes() == before
+          print('VERIFIED: actual cloud post and image; no Slack request; state unchanged')
           PY
