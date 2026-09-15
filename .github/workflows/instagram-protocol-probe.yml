@@ -10,28 +10,47 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Inspect public HTTP responses without browser or credentials
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --no-dev
+      - run: uv run --locked --no-dev playwright install --with-deps chromium
+      - name: Verify public viewer data and actual image without Slack
         run: |
-          python - <<'PY'
+          uv run --locked --no-dev python - <<'PY'
           import hashlib
-          import json
           import urllib.request
-          import urllib.error
+          from playwright.sync_api import sync_playwright
 
-          for url in ["https://www.instagram.com/lunch11_14/",
-                      "https://www.instagram.com/lunch11_14/embed/"]:
+          with sync_playwright() as runtime:
+              browser = runtime.chromium.launch()
               try:
-                  with urllib.request.urlopen(url, timeout=30) as response:
-                      body = response.read()
-                      print(json.dumps({"url": url, "status": response.status,
-                          "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
-                          "known_latest_present": b"DdQhOznzUAw" in body,
-                          "broken_embed": b"EmbedIsBroken" in body,
-                          "has_taken_at": b"taken_at" in body}))
-              except urllib.error.HTTPError as error:
-                  print(json.dumps({"url": url, "status": error.code,
-                                    "retry_after": error.headers.get("retry-after")}))
+                  page = browser.new_context(locale="en-US").new_page()
+                  response = page.goto("https://picuki.site/instagram-profile-viewer",
+                                       wait_until="networkidle", timeout=45000)
+                  print("VIEWER_HTTP", response.status, flush=True)
+                  assert response.status == 200
+                  with page.expect_response(lambda r: r.url ==
+                          "https://api-wh.picuki.site/api/v1/instagram/postsV2",
+                          timeout=30000) as pending:
+                      page.get_by_placeholder("@username or link").fill("lunch11_14")
+                      page.get_by_role("button", name="form-btn").click()
+                  response = pending.value
+                  print("FEED_HTTP", response.status, flush=True)
+                  assert response.status == 200
+                  nodes = [edge["node"] for edge in response.json()["result"]["edges"]]
+                  assert nodes and all(n["owner"]["username"] == "lunch11_14" for n in nodes)
+                  latest = max(nodes, key=lambda node: node["taken_at_timestamp"])
+                  print("LATEST", latest["shortcode"], latest["taken_at_timestamp"], flush=True)
+                  assert latest["shortcode"] == "DdQhOznzUAw"
+                  assert latest["taken_at_timestamp"] == 1789368204
+                  with urllib.request.urlopen(latest["display_url"], timeout=30) as image:
+                      body = image.read()
+                      print("IMAGE", image.status, image.headers.get("content-type"),
+                            len(body), hashlib.sha256(body).hexdigest())
+                      assert image.status == 200 and body.startswith(b"\xff\xd8\xff")
+              finally:
+                  browser.close()
           PY
