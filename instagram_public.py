@@ -104,8 +104,8 @@ def _parse_tile(username: str, tile: PublicTile) -> Post:
     )
 
 
-def select_latest_public_post(username: str, serialized_tiles: str) -> Post:
-    """Select only an unambiguous latest publication day from public profile tiles."""
+def latest_public_candidates(username: str, serialized_tiles: str) -> list[Post]:
+    """Validate all tiles and return posts on the latest visible publication day."""
     if re.fullmatch(r"[A-Za-z0-9_.]{1,30}", username) is None:
         raise PublicProfileError("Invalid Instagram username.")
     try:
@@ -124,7 +124,12 @@ def select_latest_public_post(username: str, serialized_tiles: str) -> Post:
         posts[post.shortcode] = post
 
     latest_day = max(post.timestamp for post in posts.values())
-    latest = [post for post in posts.values() if post.timestamp == latest_day]
+    return [post for post in posts.values() if post.timestamp == latest_day]
+
+
+def select_latest_public_post(username: str, serialized_tiles: str) -> Post:
+    """Select only an unambiguous latest publication day from public profile tiles."""
+    latest = latest_public_candidates(username, serialized_tiles)
     if len(latest) != 1:
         raise PublicProfileError("Multiple public posts share the same publication day.")
     return latest[0]

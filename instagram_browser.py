@@ -2,12 +2,14 @@ import hashlib
 import json
 import re
 import sys
+from dataclasses import replace
+from datetime import datetime
 
 from playwright.sync_api import Error as BrowserError
 from playwright.sync_api import Page, Response, sync_playwright
 
 from instagram_client import Post
-from instagram_public import PublicProfileError, select_latest_public_post
+from instagram_public import PublicProfileError, latest_public_candidates
 
 TILE_SELECTOR = "main a[href*='/p/']"
 TILE_SCRIPT = """links => JSON.stringify(links.flatMap(link => {
@@ -75,7 +77,39 @@ def read_public_profile(page: Page, username: str) -> Post:
     serialized: object = page.locator(TILE_SELECTOR).evaluate_all(TILE_SCRIPT)
     if not isinstance(serialized, str):
         raise PublicProfileError("Public profile returned invalid tile data.")
-    return select_latest_public_post(username, serialized)
+    candidates = latest_public_candidates(username, serialized)
+    if len(candidates) == 1:
+        return candidates[0]
+    resolved = [read_public_post_time(page, post) for post in candidates]
+    latest_time = max(post.timestamp for post in resolved)
+    latest = [post for post in resolved if post.timestamp == latest_time]
+    if len(latest) != 1:
+        raise PublicProfileError("Multiple public posts share the same publication time.")
+    return latest[0]
+
+
+def read_public_post_time(page: Page, post: Post) -> Post:
+    response = page.goto(post.permalink, wait_until="domcontentloaded", timeout=45_000)
+    if response is None or response.status >= 400:
+        status = response.status if response is not None else "unavailable"
+        if response is not None:
+            log_http_diagnostics(response)
+        raise PublicProfileError(f"Public post returned HTTP {status}; no retries attempted.")
+    if "/accounts/login" in page.url or "/challenge" in page.url:
+        raise PublicProfileError("Public post requires login or verification.")
+    # Match the post's own permalink: other time elements can belong to comments.
+    times = page.locator(f'a[href$="/p/{post.shortcode}/"] time[datetime]')
+    times.first.wait_for(state="attached", timeout=15_000)
+    values = times.evaluate_all("nodes => nodes.map(node => node.dateTime)")
+    if not isinstance(values, list) or not values or any(not isinstance(v, str) for v in values):
+        raise PublicProfileError("Public post publication time is missing.")
+    try:
+        dates = [datetime.fromisoformat(value) for value in values]
+    except ValueError as exc:
+        raise PublicProfileError("Public post publication time is invalid.") from exc
+    if any(date.tzinfo is None for date in dates) or len(set(dates)) != 1:
+        raise PublicProfileError("Public post publication time is ambiguous.")
+    return replace(post, timestamp=int(dates[0].timestamp()), timestamp_precision="second")
 
 
 def fetch_latest_public_post(username: str) -> Post:

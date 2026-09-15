@@ -9,11 +9,7 @@ permissions:
 
 jobs:
   probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +18,19 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --no-dev
-      - run: uv run --locked --no-dev playwright install chromium
-      - name: Single anonymous dry run without Slack credentials
-        run: uv run --locked --no-dev --with tzdata python instagram_slack_notifier.py --config config.example.json --dry-run
+      - run: uv run --locked --no-dev playwright install --with-deps chromium
+      - name: Single headed Chromium read without Slack or state access
+        run: |
+          xvfb-run --auto-servernum uv run --locked --no-dev python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          from instagram_browser import read_public_profile
+
+          with sync_playwright() as runtime:
+              browser = runtime.chromium.launch(headless=False)
+              try:
+                  context = browser.new_context(locale="en-US", timezone_id="UTC")
+                  post = read_public_profile(context.new_page(), "lunch11_14")
+                  print({"shortcode": post.shortcode, "timestamp": post.timestamp})
+              finally:
+                  browser.close()
+          PY
