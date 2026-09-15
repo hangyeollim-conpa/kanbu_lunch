@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -18,9 +18,11 @@ jobs:
       - run: uv sync --locked --no-dev
       - run: uv run --locked --no-dev playwright install --with-deps chromium
       - name: Verify public viewer data and actual image without Slack
+        shell: bash
         run: |
           uv run --locked --no-dev python - <<'PY'
           import hashlib
+          import re
           import urllib.request
           from playwright.sync_api import sync_playwright
 
@@ -42,8 +44,12 @@ jobs:
                   if response.status != 200:
                       error = response.json()
                       print("ERROR_KEYS", list(error) if isinstance(error, dict) else type(error).__name__)
-                      for key in ("message", "error", "detail", "status"):
+                      for key in ("message", "error", "detail", "status", "info", "code"):
                           value = error.get(key) if isinstance(error, dict) else None
+                          if isinstance(value, (int, str)) and len(str(value)) < 300:
+                              safe = re.sub(r"[A-Za-z0-9_=/+-]{24,}", "[REDACTED]", str(value))
+                              if "<" not in safe and "http" not in safe:
+                                  print("ERROR_DETAIL", key, safe)
                           if isinstance(value, str):
                               markers = [word for word in ("private", "not found", "rate", "limit",
                                   "signature", "time", "missing", "blocked", "invalid", "try again",
